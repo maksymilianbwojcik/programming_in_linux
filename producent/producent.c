@@ -14,7 +14,7 @@ int main(int argc, char* argv[])
 
     get_arguments(&tempo, &ip_address, &port, argc, argv);
 
-    printf("tempo: %g\nip address: %s\n", tempo, ip_address);
+    printf("tempo: %g\nip address: %s\nport: %u\n", tempo, ip_address, port);
 
     return EXIT_SUCCESS;
 }
@@ -44,7 +44,8 @@ void get_arguments(float *tempo, char **address, unsigned short *port, int argc,
                 }
                 break;
             default:
-                fprintf(stderr, "Usage: ./producent -p <float> [<ip.addr>:]port");
+                fprintf(stderr, "Usage: ./producent -p <float> [<ip.addr>:]port\n");
+                exit(EXIT_FAILURE);
         }
     }
 
@@ -53,7 +54,7 @@ void get_arguments(float *tempo, char **address, unsigned short *port, int argc,
         if (is_argument_valid(argv[index], *address, port))
         {
             // TODO
-            *address = argv[index];
+            // *address = argv[index];
             return;
         }
         exit(EXIT_FAILURE);
@@ -69,7 +70,7 @@ int is_argument_valid(char *argv, char *ip_address, unsigned short *port)
         case 0:
             if (is_port(argv))
             {
-                port = strtol(argv, );
+                *port = (unsigned short) strtoul(argv, NULL, 10);
             }
             break;
         case 1:
@@ -120,5 +121,10 @@ int validate_number(char *str)
 
 int is_port(char *argv)
 {
+    if (strtoul(argv, NULL, 10) < 0 || strtoul(argv, NULL, 10) > 65535)
+    {
+        fprintf(stderr, "Incorrect input. Port is outside of range 0-65535.\n");
+        exit(EXIT_FAILURE);
+    }
     return 1;
 }
