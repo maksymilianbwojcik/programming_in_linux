@@ -7,9 +7,10 @@ int main(int argc, char* argv[])
     unsigned short port;
 //    int timer = timer_create(CLOCK_MONOTONIC, SIGEV_THREAD) ;
 //    int rt = timer_create(CLOCK_REALTIME);
-//    struct sigevent {
-//
-//    };
+    int fd[2];
+    int epollfd;
+    int serverfd;
+    char buf[WRITE_PACKET_SIZE];
 
     if (argc != 4)
     {
@@ -21,10 +22,7 @@ int main(int argc, char* argv[])
 
     printf("tempo: %g\nip address: %s\nport: %u\n", tempo, ip_address, port);
 
-    int fd[2];
-    char buf[640];
-
-    if (pipe(fd) == -1)
+    if (pipe2(fd, O_NONBLOCK) == -1)
     {
         perror("Failed to create pipe!");
         exit(EXIT_FAILURE);
@@ -35,9 +33,6 @@ int main(int argc, char* argv[])
         case -1:
             err(1,NULL);
         case  0:
-            // TODO dystrybucja
-            // dystrybucja wyciąganie z pipe'a i wysyłanie poprzez socket
-
             if (close(fd[1]) == -1)
             {
                 perror("Failed to close write end of pipe!");
@@ -64,6 +59,18 @@ int main(int argc, char* argv[])
                 exit(EXIT_FAILURE);
             }
 
+            if ((epollfd = epoll_create1(0)) == -1)
+            {
+                perror("Failed to create epoll instance!");
+                exit(EXIT_FAILURE);
+            }
+
+            if ((serverfd = socket(AF_INET,SOCK_STREAM,0)) == -1)
+            {
+                perror("Failed to create server socket!");
+                exit(EXIT_FAILURE);
+            }
+
 //            if (timer_create() == -1)
 //            {
 //                perror("Failed to create timer!");
@@ -78,7 +85,7 @@ int main(int argc, char* argv[])
                     if (letter == 123) letter = 'A';
 
                     memset(buf, letter, sizeof(buf));
-                    if (write_to_pipe(fd, buf, sizeof(buf), tempo)) letter++;
+                    if (write_to_pipe(fd, buf, tempo)) letter++;
                 }
 
                 // configure_timer();
@@ -217,7 +224,7 @@ int is_port(char *argv)
     return 1;
 }
 
-int write_to_pipe(int *fd, char *buf, int size, float tempo)
+int write_to_pipe(int *fd, char *buf, float tempo)
 {
     // TODO błędy do timestruct
 
@@ -234,3 +241,4 @@ int write_to_pipe(int *fd, char *buf, int size, float tempo)
 
     return 1;
 }
+
