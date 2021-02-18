@@ -8,22 +8,17 @@ int main(int argc, char* argv[])
     char *ip_address = "localhost";
     unsigned short port;
     struct sockaddr_in server_addr;
-    char buf[RECV_PACKET_SIZE];
+    char buf[WHOLE_MESSAGE_SIZE];
+    // char buf[RECV_PACKET_SIZE];
     unsigned long long available_space;
+    struct timespec timediff;
 
-    struct timespec connection_time;
     char *report = "CLIENT REPORT:\n";
 
-    int sock_fd = socket(AF_INET,SOCK_STREAM,0);
-    if (sock_fd == -1)
-    {
-        perror("Failed to create socket");
-        exit(EXIT_FAILURE);
-    }
 
     get_arguments(argc, argv, &ip_address, &port, &blocks, &consumption, &degradation, &available_space);
     available_space = (unsigned int) blocks * BLOCK_SIZE;
-    available_space = BLOCK_SIZE-1;
+    // available_space = BLOCK_SIZE-1;
 
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(port);
@@ -36,43 +31,96 @@ int main(int argc, char* argv[])
         exit(EXIT_FAILURE);
     }
 
-    if (connect(sock_fd, (struct sockaddr*) &server_addr, sizeof(server_addr)) == -1)
-    {
-        fprintf(stderr, "Connection to server failed!\n");
-        exit(EXIT_FAILURE);
-    }
-    printf("Connected!\n");
-
-    if (clock_gettime(CLOCK_MONOTONIC, &connection_time) == -1)
+    // printf("Available space before checking, if there's a space for message: %llu\n", available_space);
+    if (clock_gettime(CLOCK_MONOTONIC, &timediff) == -1)
     {
         fprintf(stderr, "Failed to retrieve time of connection!");
         exit(EXIT_FAILURE);
     }
-    printf("%llu\n", available_space);
 
-    while (free_space(&available_space, consumption, &connection_time, blocks) >= WHOLE_MESSAGE_SIZE)
+    long long unsigned a;
+    while ((a = free_space(&available_space, degradation, &timediff, blocks)) >= WHOLE_MESSAGE_SIZE)
     {
         // report = realloc(report, )
-        if (recv(sock_fd, &buf, WHOLE_MESSAGE_SIZE, MSG_DONTWAIT | MSG_PEEK) == WHOLE_MESSAGE_SIZE)
+        // printf("Client's free space: %llu\nDegradation rate: %f\n\n\n", a, degradation);
+        int bytes_read = 0;
+        struct timespec connection_time;
+        struct timespec time_of_first_read;
+        struct timespec disconnection_time;
+
+        printf("Client's free space: %llu\n", a);
+
+        int sock_fd = socket(AF_INET,SOCK_STREAM,0);
+        if (sock_fd == -1)
         {
-            printf("there's 13kib in server socket");
-            if (recv(sock_fd, &buf, RECV_PACKET_SIZE, MSG_DONTWAIT | MSG_WAITALL) == WHOLE_MESSAGE_SIZE)
+            perror("Failed to create socket");
+            exit(EXIT_FAILURE);
+        }
+
+        if (connect(sock_fd, (struct sockaddr*) &server_addr, sizeof(server_addr)) == -1)
+        {
+            fprintf(stderr, "Connection to server failed!\n");
+            exit(EXIT_FAILURE);
+        }
+        printf("CONNECTED\n");
+
+        if (clock_gettime(CLOCK_MONOTONIC, &connection_time) == -1)
+        {
+            fprintf(stderr, "Failed to retrieve time of connection!");
+            exit(EXIT_FAILURE);
+        }
+
+        while (bytes_read < WHOLE_MESSAGE_SIZE)
+        {
+            struct timespec delay;
+            int bytes_read_in_iteration = 0;
+            if ((bytes_read_in_iteration = recv(sock_fd, buf, WHOLE_MESSAGE_SIZE - bytes_read, MSG_DONTWAIT)) != -1)
             {
-                available_space = available_space - RECV_PACKET_SIZE;
-                write(STDOUT_FILENO, &buf, sizeof(buf));
+                if ((bytes_read == 0) && (bytes_read_in_iteration > 0))
+                {
+                    if (clock_gettime(CLOCK_MONOTONIC, &time_of_first_read) == -1)
+                    {
+                        fprintf(stderr, "Failed to retrieve time of first read!");
+                        exit(EXIT_FAILURE);
+                    }
+                }
+                bytes_read += bytes_read_in_iteration;
+
+                printf("Available space: %llu\n", available_space);
+                available_space -= bytes_read_in_iteration;
+                printf("Bytes read: %d\nBytes read in iteration: %d\nAvailable space: %llu\n", bytes_read, bytes_read_in_iteration, available_space);
+
+                delay.tv_sec = bytes_read_in_iteration / (int) consumption;
+                delay.tv_nsec = (bytes_read_in_iteration / consumption - bytes_read_in_iteration / (int) consumption) * pow(10, 9);
+
+                // printf("%s\n", buf);
+                // printf("%d / %f = %f\n", bytes_read_in_iteration, consumption, bytes_read_in_iteration / consumption);
+                printf("Delay: %ld.%ld\n", delay.tv_sec, delay.tv_nsec);
+
+                nanosleep(&delay, NULL);
+                printf("Available space: %llu\n\n\n", available_space);
+
+                if (delay.tv_sec == 0) sleep(1);
             }
         }
-        sleep(1);
-        // generate_block_report(available_space);
+
+        if (shutdown(sock_fd,SHUT_RDWR) == -1)
+        {
+            perror("Shutdown fail");
+            exit(2);
+        } else printf("DISCONNECTED!\n");
+
+        if (clock_gettime(CLOCK_MONOTONIC, &disconnection_time) == -1)
+        {
+            fprintf(stderr, "Failed to retrieve time of disconnection!");
+            exit(EXIT_FAILURE);
+        }
+
+        // generate_block_report(report, sock_fd, connection_time, time_of_first_read, disconnection_time);
     }
 
-    if( shutdown(sock_fd,SHUT_RDWR) ) {
-        perror("Shutdown fail\n");
-        exit(2);
-    } else {
-        generate_final_report();
-        printf("%s", report);
-    }
+    generate_final_report();
+    printf("%s", report);
 
     return 1;
 }
@@ -82,24 +130,54 @@ void generate_final_report()
     struct timespec rt;
     if (clock_gettime(CLOCK_REALTIME, &rt) == -1)
     {
-        perror("Unable to retrieve RealTime for final report!");
+        perror("Unable to retrieve RealTime for final report");
         exit(EXIT_FAILURE);
     }
 
     printf("REALTIME: %ld.%ld\n", rt.tv_sec, rt.tv_nsec);
-    printf("PID: %d\n", getpid());
 }
 
-//void generate_block_report(unsigned long long available_space)
-//{
-//    // printf("REALTIME: %d", timer_gettime(realtime, ));
-//    printf("BLOCK REPORT:\n");
-//    printf("%llu\n", available_space);
-//    sleep(1);
-//    // printf("THE END\n");
-//}
+void generate_block_report(char *report, int sock_fd, struct timespec connection, struct timespec time_of_first_read, struct timespec disconnection)
+{
+    struct sockaddr_in connection_address;
+    unsigned int address_len;
+    struct timespec result;
 
-unsigned long long free_space(unsigned long long *available_space, int degradation_rate, struct timespec *time, unsigned int blocks)
+    char *tmp = "";
+
+    if (getsockname(sock_fd, (struct sockaddr*) &connection_address, &address_len) == -1)
+    {
+        fprintf(stderr, "Unable to obtain client's address");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("BLOCK REPORT:\n");
+    printf("PID: %d\n", getpid());
+    printf("Client's address: %s:%d\n", inet_ntoa(connection_address.sin_addr), (int) ntohs(connection_address.sin_port));
+
+    if (timespec_subtract(&result, &time_of_first_read, &connection) == 1)
+    {
+        fprintf(stderr, "Time of first read - time of connection < 0\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // printf("Connection to first read: %ld.%ld\n", time_of_first_read.tv_sec - connection.tv_sec, time_of_first_read.tv_nsec - connection.tv_nsec);
+    printf("Connection to first read: %ld.%ld\n", result.tv_sec, result.tv_nsec);
+
+    if (timespec_subtract(&result, &disconnection, &time_of_first_read) == 1)
+    {
+        fprintf(stderr, "Time of disconnection - time of first read < 0\n");
+        exit(EXIT_FAILURE);
+    }
+
+    // printf("First read to disconnection: %ld.%ld\n", disconnection.tv_sec - time_of_first_read.tv_sec, disconnection.tv_nsec - time_of_first_read.tv_nsec);
+    printf("First read to disconnection: %ld.%ld\n", result.tv_sec, result.tv_nsec);
+
+    // *report += tmp;
+}
+
+
+unsigned long long free_space(unsigned long long *available_space, float degradation_rate, struct timespec *time, unsigned int blocks)
 {
     struct timespec last_read = *time;
 
@@ -111,9 +189,22 @@ unsigned long long free_space(unsigned long long *available_space, int degradati
 
     double time_diff = time->tv_sec - last_read.tv_sec + (time->tv_nsec - last_read.tv_nsec) / (double) 1000000000;
 
-    if (degradation_rate * time_diff > *available_space) *available_space = 0;
-    else if (*available_space + degradation_rate * time_diff > blocks * BLOCK_SIZE) *available_space = blocks * BLOCK_SIZE;
-    else *available_space = *available_space + degradation_rate * time_diff;
+    printf("Free space before: %llu\n", *available_space);
+    printf("Degradation rate * time diff: %f * %f\n", degradation_rate, time_diff);
+
+    if ((*available_space + degradation_rate * time_diff) > (blocks * BLOCK_SIZE))
+    {
+        // printf("blocks * BLOCK_SIZE: %u * %d = %d\n", blocks, BLOCK_SIZE, blocks * BLOCK_SIZE);
+        *available_space = blocks * BLOCK_SIZE;
+    }
+    else
+    {
+        // printf("blocks * BLOCK_SIZE: %u * %d = %d\n", blocks, BLOCK_SIZE, blocks * BLOCK_SIZE);
+        *available_space += degradation_rate * time_diff;
+    }
+
+
+    printf("Free space after: %llu\n", *available_space);
 
     return *available_space;
 }
@@ -129,7 +220,7 @@ void get_arguments(int argc, char* argv[], char **address, unsigned short *port,
         switch (opt)
         {
             case 'c':
-                *blocks = (int) strtoul(optarg, NULL, 10);
+                *blocks = (unsigned int) strtoul(optarg, NULL, 10);
                 break;
             case 'd':
                 errno = 0;
@@ -160,7 +251,7 @@ void get_arguments(int argc, char* argv[], char **address, unsigned short *port,
                 }
                 break;
             default:
-                fprintf(stderr, "i dont fucking care anymore");
+                fprintf(stderr, "unknown getopt value\n");
                 exit(EXIT_FAILURE);
         }
     }
@@ -262,3 +353,83 @@ int is_port(char *argv)
     }
     return 1;
 }
+
+int timespec_subtract (struct timespec *result, struct timespec *x, struct timespec *y)
+{
+    /* Perform the carry for the later subtraction by updating y. */
+    if (x->tv_nsec < y->tv_nsec) {
+        int nsec = (y->tv_nsec - x->tv_nsec) / pow(10, 9) + 1;
+        y->tv_nsec -= pow(10, 9) * nsec;
+        y->tv_sec += nsec;
+    }
+    if (x->tv_nsec - y->tv_nsec > 1000000) {
+        int nsec = (x->tv_nsec - y->tv_nsec) / pow(10, 9);
+        y->tv_nsec += pow(10, 9) * nsec;
+        y->tv_sec -= nsec;
+    }
+
+    /* Compute the time remaining to wait.
+       tv_nsec is certainly positive. */
+    result->tv_sec = x->tv_sec - y->tv_sec;
+    result->tv_nsec = x->tv_nsec - y->tv_nsec;
+
+    /* Return 1 if result is negative. */
+    return x->tv_sec < y->tv_sec;
+}
+
+
+
+//        int bytes_read = 0;
+//        while (bytes_read < WHOLE_MESSAGE_SIZE)
+//        {
+//            if (recv(sock_fd, buf, WHOLE_MESSAGE_SIZE, MSG_DONTWAIT | MSG_PEEK) != -1)
+//            {
+//                bytes_read += recv(sock_fd, buf, WHOLE_MESSAGE_SIZE, MSG_DONTWAIT | MSG_PEEK);
+//            }
+//        }
+
+
+//        if (recv(sock_fd, buf, WHOLE_MESSAGE_SIZE, MSG_DONTWAIT | MSG_PEEK) == WHOLE_MESSAGE_SIZE) // jeśli pod socketem nie ma 13kib to czekaj z tym odbieraniem pakietów
+//        {
+//            // printf("there's 13kib in server socket\n");
+//            if (recv(sock_fd, buf, RECV_PACKET_SIZE, MSG_DONTWAIT) == RECV_PACKET_SIZE)
+//            {
+//                // printf("%s\n", buf);
+//                available_space = available_space - RECV_PACKET_SIZE;
+//                // write(STDOUT_FILENO, buf, sizeof(buf));
+//                write(STDOUT_FILENO, buf, RECV_PACKET_SIZE);
+//                printf("\n");
+//            }
+//            else
+//            {
+//                available_space = available_space - RECV_PACKET_SIZE;
+//                // write(STDOUT_FILENO, buf, sizeof(buf));
+//                write(STDOUT_FILENO, buf, RECV_PACKET_SIZE);
+//                // printf("%s\nEnd of 13KiB message\n\n", buf);
+//                printf("End of 13KiB message\n\n");
+//            }
+//        }
+//        sleep(1);
+//      generate_block_report(available_space);
+
+
+
+//    printf("Degradation rate: %f\n", degradation_rate);
+//    printf("timediff: %f\n", time_diff);
+//    printf("%llu + %f * %f = %f\n", *available_space, degradation_rate, time_diff, *available_space + degradation_rate * time_diff);
+
+//    if (degradation_rate * time_diff > *available_space)
+//    {
+//        *available_space = 0;
+//        printf("A\n");
+//    }
+//    else if ((*available_space + degradation_rate * time_diff) > (blocks * BLOCK_SIZE))
+//    {
+//        *available_space = blocks * BLOCK_SIZE;
+//        printf("B\n");
+//    }
+//    else
+//    {
+//        printf("C\n");
+//        *available_space = *available_space + degradation_rate * time_diff;
+//    }

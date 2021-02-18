@@ -1,4 +1,5 @@
 #include "producent.h"
+// http://ptgmedia.pearsoncmg.com/images/0321335724/samplechapter/seacord_ch05.pdf
 
 int main(int argc, char* argv[])
 {
@@ -61,44 +62,86 @@ int main(int argc, char* argv[])
                 exit(EXIT_FAILURE);
             }
 
+            char (*locked_resources)[WHOLE_MESSAGE_SIZE];
+
             while (1)
             {
-                int client_fd;
-                if ((client_fd = polaczenie(serverfd)) != -1)
-                {
-                    event.events = EPOLLOUT;
-                    event.data.u32 = 0;
-                    printf("Connection accepted");
+                int open_fds = epoll_wait(epollfd, evlist, MAX_CLIENTS + 1, 0);
 
-                    makeSocketNonBlocking(client_fd);
+                // char locked_resources[open_fds][WHOLE_MESSAGE_SIZE]; ŹLE
+                // printf("events in this loop iteration: %d\n", open_fds);
 
-                    if (ioctl(fd[0], FIONREAD, ) == 0)
-                    if (epoll_ctl(epollfd, EPOLL_CTL_ADD, client_fd, &event) == -1)
-                    {
-                        perror("Failed to create epoll event for connected socket");
-                        exit(EXIT_FAILURE);
-                    }
-
-                    // pobierz 13kib i wrzuć na serwer
-                    while (read(client_fd, )) ;
-                }
-
-                // if () // jest 13KiB w pipe'ie to wyciągnij je z pipe'a i przyedziel do konkretnego deskryptora
-
-                int open_fds = epoll_wait(epollfd, evlist, MAX_CLIENTS + 1, 0); // znajdź otwarte na odczyt deskryptory
+                sleep(1);
                 for (int i = 0; i < open_fds; i++)
                 {
-                    printf("  fd=%d; events: %s%s%s%s\n", evlist[i].data.fd,
-                           (evlist[i].events & EPOLLIN)  ? "EPOLLIN "  : "",
-                           (evlist[i].events & EPOLLOUT)  ? "EPOLLOUT "  : "",
-                           (evlist[i].events & EPOLLHUP) ? "EPOLLHUP " : "",
-                           (evlist[i].events & EPOLLERR) ? "EPOLLERR " : "");
+//                    printf("  fd=%d; events: %s%s%s%s\n", evlist[i].data.fd,
+//                           (evlist[i].events & EPOLLIN) ? "EPOLLIN " : "",
+//                           (evlist[i].events & EPOLLOUT) ? "EPOLLOUT " : "",
+//                           (evlist[i].events & EPOLLHUP) ? "EPOLLHUP " : "",
+//                           (evlist[i].events & EPOLLERR) ? "EPOLLERR " : "");
 
-                    // send(evlist[i], buffer, 4kib, flags);
+                    if (evlist[i].data.fd == serverfd)
+                    {
+                        int client_fd;
+                        if ((client_fd = polaczenie(serverfd)) != -1)
+                        {
+                            event.events = EPOLLOUT;
+                            event.data.fd = client_fd;
+                            printf("Connection accepted: fd=%d\n", client_fd);
+
+                            makeSocketNonBlocking(client_fd);
+
+                            if (epoll_ctl(epollfd, EPOLL_CTL_ADD, client_fd, &event) == -1)
+                            {
+                                perror("Failed to create epoll event for connected socket");
+                                exit(EXIT_FAILURE);
+                            }
+
+                            // char buffer[WHOLE_MESSAGE_SIZE];
+                            int bytes_read = 0;
+
+                            while (bytes_read < WHOLE_MESSAGE_SIZE)
+                            {
+                                bytes_read += read(fd[0], locked_resources[i], WHOLE_MESSAGE_SIZE - bytes_read);
+                                printf("%d\n", bytes_read);
+                            }
+                        }
+                    }
+                    else if (evlist[i].events & EPOLLOUT)
+                    {
+                        int bytes_sent;
+//                        if ((bytes_sent = send(evlist[i].data.fd, locked_resources[i], SEND_PACKET_SIZE, 0)) == -1)
+//                        {
+//                            perror("Failed to reserve data for client (sending data to server failed)");
+//                            exit(EXIT_FAILURE);
+//                        }
+                        // printf("%s\n", locked_resources[i]);
+
+                        if ((bytes_sent = send(evlist[i].data.fd, , SEND_PACKET_SIZE, 0)) == -1)
+                        {
+                            perror("Failed to reserve data for client (sending data to server failed)");
+                            exit(EXIT_FAILURE);
+                        }
+
+                        // locked_resources = locked_resources + bytes_sent;
+                        printf("%d bytes sent to client %d\n", bytes_sent, evlist[i].data.fd);
+                    }
+                    else if ((evlist[i].events & EPOLLERR) || (evlist[i].events & EPOLLHUP))
+                    {
+                        if (epoll_ctl(epollfd, EPOLL_CTL_DEL, evlist[i].data.fd, &event) == -1)
+                        {
+                            perror("Unable to delete epoll event");
+                            exit(EXIT_FAILURE);
+                        }
+                        if (close(evlist[i].data.fd) == -1)
+                        {
+                            perror("Unable to close client's descriptor");
+                            exit(EXIT_FAILURE);
+                        }
+                    }
+                    // if (close(evlist[i].data.fd) == -1)
+                    // sleep(1);
                 }
-
-                //printf("...\n");
-                //sleep(5);
             }
 
             exit(EXIT_SUCCESS);
@@ -145,7 +188,7 @@ void get_arguments(float *tempo, char **address, unsigned short *port, int argc,
     int opt;
     char *endptr;
     int index;
-    
+
     while ((opt = getopt(argc, argv, "p:")) != -1)
     {
         switch (opt)
@@ -271,18 +314,14 @@ int is_port(char *argv)
 int write_to_pipe(int *fd, char *buf, float tempo)
 {
     struct timespec ts;
-    ts.tv_sec = 640 / tempo;
-    ts.tv_nsec = ((float) 640 / tempo - 640 / tempo) * pow(10, 9);
+    ts.tv_sec = WRITE_PACKET_SIZE / tempo;
+    ts.tv_nsec = (WRITE_PACKET_SIZE / tempo - WRITE_PACKET_SIZE / (int) tempo) * pow(10, 9);
 
     nanosleep(&ts, NULL);
-    if (write(fd[1], buf, sizeof(buf)) == -1)
-    {
-        perror("Failed to write into a pipe!");
-        return 0;
-    }
-
-    while (read(fd[0], &buf, 1) > 0)
-        write(STDOUT_FILENO, &buf, 1);
+    if (write(fd[1], buf, WRITE_PACKET_SIZE) != WRITE_PACKET_SIZE) return 0;
+//    long c;
+//    if ((c = write(fd[1], buf, WRITE_PACKET_SIZE)) != WRITE_PACKET_SIZE) return 0;
+//    printf("%ld\n", c);
 
     return 1;
 }
@@ -305,13 +344,13 @@ int create_server(char *ip_address, int port)
 
     if (bind(server_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) == -1)
     {
-        perror("Failed to bind");
+        perror("Failed to bind\n");
         return -1;
     }
 
     if (listen(server_fd, MAX_CLIENTS) == -1)
     {
-        perror("Failed to listen on server socket!");
+        perror("Failed to listen on server socket\n");
         return -1;
     }
 
